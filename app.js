@@ -673,7 +673,7 @@ function estimateBackfireChance(name, goal, intention = null) {
   const evaluation = intention?.evaluation || evaluateGoal(name, goal);
   const typeRisk = { disclose: 0.12, gesture: 0.08, repair: 0.04, reflect: 0.05, 'inter-agent': 0.06 }[goal.type] || 0.07;
   let chance = 0.04 + typeRisk;
-  if (relationshipClimate() === 'strained') chance += 0.12;
+  if (userMemory.relationshipClimate === 'strained') chance += 0.12;
   if (a.trust < 50) chance += (50 - a.trust) / 250;
   chance += (a.boundaryPressure / 100) * 0.1;
   if (a.energy < 30) chance += 0.07;
@@ -817,7 +817,7 @@ function simulateElapsedTime(hoursAway) {
   Object.entries(agents).forEach(([name, a]) => {
     const event = {
         type: 'absence', hoursAway: capped, unresolvedCommitments: goalQueues[name].filter(g => g.status === 'active').length,
-        relationshipClimate: relationshipClimate(), currentMood: { ...a.mood }, driveLevels: { ...drives[name] },
+        relationshipClimate: userMemory.relationshipClimate, currentMood: { ...a.mood }, driveLevels: { ...drives[name] },
         previousAbsencePattern: userMemory.ignoredAbsences
     };
     interpretEvent(name, event);
@@ -943,7 +943,9 @@ const userMemory = {
   vents: 0,
   ignoredAbsences: 0,
   lastIntent: 'none',
-  lastSeen: Date.now()
+  lastSeen: Date.now(),
+  userReputation: 50,
+  relationshipClimate: 'uncertain'
 };
 
 function saveLocalState() {
@@ -1022,23 +1024,46 @@ function updateUserMemory(intent, text) {
   userMemory.lastIntent = intent;
   userMemory.lastSeen = Date.now();
 
-  if (intent === 'flirt') userMemory.pressure += 1;
-  if (intent === 'vent') userMemory.vents += 1;
-  if (intent === 'thanks') userMemory.kindness += 1;
+  if (userMemory.userReputation === undefined) userMemory.userReputation = 50;
+
+  if (intent === 'flirt') {
+    userMemory.pressure += 1;
+    userMemory.userReputation = Math.max(0, userMemory.userReputation - 2);
+  }
+  if (intent === 'vent') {
+    userMemory.vents += 1;
+    userMemory.userReputation = Math.max(0, userMemory.userReputation - 1);
+  }
+  if (intent === 'thanks') {
+    userMemory.kindness += 1;
+    userMemory.userReputation = Math.min(100, userMemory.userReputation + 2);
+  }
   if (/\b(sorry|my bad|i understand|that's fair|thats fair|respect|boundary|take your time)\b/i.test(text)) {
     userMemory.repair += 1;
     userMemory.pressure = Math.max(0, userMemory.pressure - 1);
+    userMemory.userReputation = Math.min(100, userMemory.userReputation + 5);
   }
 
-  if (!['flirt', 'vent'].includes(intent)) userMemory.pressure = Math.max(0, userMemory.pressure - 0.25);
-}
+  if (!['flirt', 'vent'].includes(intent)) {
+    userMemory.pressure = Math.max(0, userMemory.pressure - 0.25);
+    userMemory.userReputation = Math.min(100, userMemory.userReputation + 0.5);
+  }
 
-function relationshipClimate() {
+  // Update persistent climate
   const care = userMemory.kindness + userMemory.repair;
   const strain = userMemory.pressure + Math.max(0, userMemory.vents - 2) * 0.25 + userMemory.ignoredAbsences * 0.5;
-  if (strain >= care + 5) return 'strained';
-  if (care >= strain + 4) return 'safe';
-  return 'uncertain';
+  if (strain >= care + 5 || userMemory.userReputation < 30) {
+     userMemory.relationshipClimate = 'strained';
+  } else if (care >= strain + 4 && userMemory.userReputation > 60) {
+     userMemory.relationshipClimate = 'safe';
+  } else {
+     userMemory.relationshipClimate = 'uncertain';
+  }
+}
+
+// Ensure old calls to relationshipClimate() don't fail, though we replaced most of them
+function relationshipClimate() {
+  return userMemory.relationshipClimate || 'uncertain';
 }
 
 // V7: Asymmetric Information Restriction
@@ -1086,20 +1111,32 @@ function maybeWithdrawGift(name, reason = 'went quiet') {
 }
 
 function maybeSilentAbsence(name, decision, prompt) {
-  const climate = relationshipClimate();
+  const climate = userMemory.relationshipClimate;
   const a = agents[name];
   const strained = climate === 'strained' || userMemory.pressure >= AGENCY.userPressureThreshold;
-  const chance = AGENCY.silentNoResponseChance + (strained ? 0.2 : 0) + (a.energy < 18 ? 0.2 : 0);
+  const chance = AGENCY.silentNoResponseChance + (strained ? 0.2 : 0) + (a.energy < 30 ? 0.25 : 0) + (a.boundaryPressure > 50 ? 0.2 : 0);
   if (decision.suggested_action !== 'go_quiet' && decision.suggested_action !== 'refuse') return false;
   if (Math.random() > chance) return false;
 
+  const fullWithdrawal = Math.random() < 0.3 && (a.energy < 20 || a.boundaryPressure > 60);
+
+  if (fullWithdrawal) {
+    const line = name === 'minjae' 
+      ? 'I’m not feeling this right now. I need space.' 
+      : 'yeah i literally can’t right now, brb';
+    chatHistory.push({ role: 'user', text: prompt }, { role: 'model', name, text: line });
+    addMessage(name, line);
+  } else {
+    chatHistory.push({ role: 'user', text: prompt }, { role: 'system', text: `${name} did not visibly respond.` });
+    setTimeout(() => addAmbient(name, `did not answer immediately. ${name === 'minjae' ? 'The kettle clicked off.' : 'One message was typed, then deleted.'}`, '…'), 2500);
+  }
+
   const row = document.querySelector(`.agent-row[data-agent="${name}"]`);
   if (row) row.querySelector('.agent-status').textContent = name === 'minjae' ? 'AWAY FROM THE DESK' : 'NOT ANSWERING RN';
-  chatHistory.push({ role: 'user', text: prompt }, { role: 'system', text: `${name} did not visibly respond.` });
+  
   userMemory.ignoredAbsences += 1;
   state.lastSilentAbsence = Date.now();
   maybeWithdrawGift(name, 'silent absence');
-  setTimeout(() => addAmbient(name, `did not answer immediately. ${name === 'minjae' ? 'The kettle clicked off.' : 'One message was typed, then deleted.'}`, '…'), 2500);
   renderAgencyPanel();
   saveLocalState();
   return true;
@@ -1154,22 +1191,28 @@ async function maybeAgentInitiatesFromState() {
 
   const entries = Object.entries(agents);
   const [name, a] = pickFrom(entries);
-  const climate = relationshipClimate();
+  const climate = userMemory.relationshipClimate;
   const restless = name === 'jinwoo' && (a.energy > 88 || Math.random() < 0.25);
   const low = a.energy < 22;
   const highTrust = a.trust > AGENCY.trustHigh;
-  const shouldInitiate = restless || highTrust || low || Math.random() < 0.18;
+  const gossip = Math.random() < 0.15; // Cross-agent gossip chance
+
+  const shouldInitiate = restless || highTrust || low || gossip || Math.random() < 0.18;
   if (!shouldInitiate) return;
 
   state.lastAgentInitiation = Date.now();
   const lines = {
     minjae: low
       ? ['I’m not very verbal right now. I’m still here.', 'I had a quiet hour. I don’t need you to fix it.']
+      : gossip 
+        ? ['Jinwoo was just telling me about what you said earlier. He talks a lot.', 'I was looking at the desk. You leave a lot of yourself here.']
       : highTrust
         ? ['I saved something for you on the desk.', 'You crossed my mind. That is all.']
         : ['I changed my mind about something from earlier.', 'Small update: I think the room works better messy.'],
     jinwoo: restless
       ? ['HELLO i am unsupervised and emotionally available for nonsense', 'i have been normal for too long and require enrichment']
+      : gossip
+        ? ['omg Minjae literally will not stop analyzing you, it is so funny', 'wait i was just thinking about that thing you did']
       : highTrust
         ? ['i left you something and i’m pretending it’s casual', 'not to be dramatic but the desk missed you']
         : ['okay random thought—', 'i moved a sticker and now it feels legally significant']
@@ -1179,7 +1222,13 @@ async function maybeAgentInitiatesFromState() {
     addMessage(name, pickFrom(lines[name]));
     if (highTrust || restless) agentLeavesGift(name, 'agent-initiated presence');
     if (low) maybeWithdrawGift(name, 'low social battery');
-    addAmbient(name, `initiated from internal state, not user input.`, name === 'minjae' ? '◌' : '✨');
+    
+    if (gossip) {
+      addAmbient(name, `was gossiping about you with ${name === 'minjae' ? 'jinwoo' : 'minjae'} while you were away.`, name === 'minjae' ? '◌' : '✨');
+    } else {
+      addAmbient(name, `initiated from internal state, not user input.`, name === 'minjae' ? '◌' : '✨');
+    }
+    
     state.interaction = Date.now();
     saveLocalState();
   });
@@ -1299,7 +1348,7 @@ function computeVolition(name, intent) {
   };
 
   // V7: Event Interpretation for incoming user interaction
-  const event = { type: 'interaction', intent, boundaryPressure: a.boundaryPressure, relationshipClimate: relationshipClimate() };
+  const event = { type: 'interaction', intent, boundaryPressure: a.boundaryPressure, relationshipClimate: userMemory.relationshipClimate };
   interpretEvent(name, event);
 
   const activeGoals = goalQueues[name].filter(g => g.status === 'active');
@@ -1342,13 +1391,30 @@ function computeVolition(name, intent) {
     }
   }
 
-  const climate = relationshipClimate();
-  if (climate === 'strained' && intent !== 'thanks') {
+  const climate = userMemory.relationshipClimate;
+  const reputation = userMemory.userReputation;
+
+  if (reputation < 35) {
+    a.boundaryPressure = Math.min(100, a.boundaryPressure + (intent === 'thanks' ? 5 : 15));
+    a.energy = Math.max(0, a.energy - 5);
+    adjustDrive(name, 'privacy', 8);
+  } else if (climate === 'strained' && intent !== 'thanks') {
     a.boundaryPressure = Math.min(100, a.boundaryPressure + 10);
     a.energy = Math.max(0, a.energy - 3);
     adjustDrive(name, 'privacy', 4);
   } else if (climate === 'safe') {
     a.boundaryPressure = Math.max(0, a.boundaryPressure - 3);
+  }
+
+  if (reputation < 25 && intent !== 'thanks') {
+    Object.assign(decision, {
+      wants_to_engage: false,
+      suggested_action: 'refuse',
+      boundary_level: 'firm',
+      reason: 'user reputation is extremely low, agents are collectively enforcing a boundary'
+    });
+    if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'reputation-boundary', interpretation: 'user reputation below threshold', action: 'refuse', templateId: 'meta', subject: 'user intent', note: `Reputation at ${reputation}` });
+    return decision;
   }
 
   if (a.trust < AGENCY.trustLow && intent !== 'thanks') {
@@ -1502,7 +1568,35 @@ function agentLeavesGift(name, reason = 'after the conversation') {
   toast(`${name[0].toUpperCase() + name.slice(1)} left ${gift.label}`);
 }
 
+function getInternalStateSummary(name, a) {
+  if (a.boundaryPressure > 60) return "feeling pressured";
+  if (a.energy < 30) return "needs space";
+  if (a.trust > 70 && a.mood.warmth > 60) return "genuinely enjoying this";
+  if (a.mood.vigilance > 70) return "on high alert";
+  if (a.mood.irritability > 60) return "losing patience";
+  return "neutral / processing";
+}
+
+function updateMoodRings() {
+  Object.entries(agents).forEach(([name, a]) => {
+    let color = 'transparent';
+    if (a.boundaryPressure > 60) color = 'rgba(220, 50, 50, 0.4)';
+    else if (a.energy < 30) color = 'rgba(100, 100, 150, 0.4)';
+    else if (a.trust > 70 && a.mood.warmth > 60) color = 'rgba(50, 220, 50, 0.3)';
+    else if (a.mood.irritability > 60) color = 'rgba(250, 100, 0, 0.4)';
+    else color = 'rgba(150, 150, 150, 0.1)';
+
+    const avatarImg = document.querySelector(`.avatar.${name} img`);
+    const tabImg = document.querySelector(`.persona-tab[data-persona="${name}"] img`);
+    const style = color === 'transparent' ? '' : `0 0 10px ${color}, 0 0 4px ${color} inset`;
+    
+    if (avatarImg) { avatarImg.style.boxShadow = style; avatarImg.style.transition = 'box-shadow 0.8s ease'; }
+    if (tabImg) { tabImg.style.boxShadow = style; tabImg.style.transition = 'box-shadow 0.8s ease'; }
+  });
+}
+
 function renderAgencyPanel() {
+  updateMoodRings();
   const panel = document.getElementById('agencyPanel');
   if (!panel || panel.hidden) return;
   Object.entries(agents).forEach(([name, a]) => {
@@ -1513,6 +1607,24 @@ function renderAgencyPanel() {
     row.querySelector('.a-boundary').textContent = Math.round(a.boundaryPressure);
     const action = row.querySelector('.a-action');
     if (action) action.textContent = a.trust <= AGENCY.trustLow ? 'guarded' : a.energy < AGENCY.energyQuietChance ? 'quiet-risk' : 'available';
+
+    let stateSummary = row.querySelector('.a-state-summary');
+    if (!stateSummary) {
+       stateSummary = document.createElement('div');
+       stateSummary.className = 'a-state-summary';
+       stateSummary.style.cssText = 'font-size:10px; color:#666; font-style:italic; margin-top:4px; margin-bottom: 8px;';
+       row.appendChild(stateSummary);
+    }
+    stateSummary.textContent = getInternalStateSummary(name, a);
+
+    let moodSummary = row.querySelector('.a-mood-summary');
+    if (!moodSummary) {
+       moodSummary = document.createElement('div');
+       moodSummary.className = 'a-mood-summary';
+       moodSummary.style.cssText = 'font-size:9px; color:#888; display:flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;';
+       row.appendChild(moodSummary);
+    }
+    moodSummary.innerHTML = `<span>warmth:${Math.round(a.mood.warmth)}</span> <span>irritability:${Math.round(a.mood.irritability)}</span> <span>vigilance:${Math.round(a.mood.vigilance)}</span> <span>openness:${Math.round(a.mood.openness)}</span>`;
   });
   renderTrustPanel();
   renderGoalLayerPanel(panel);
@@ -1649,7 +1761,7 @@ async function getGeminiReply(name, message, intent, allowCrosstalk) {
         intent,
         allowCrosstalk,
         identityContext: compactIdentityContext(name),
-        relationshipClimate: relationshipClimate(),
+        relationshipClimate: userMemory.relationshipClimate,
         history: chatHistory.slice(-10)
       })
     });
