@@ -73,21 +73,29 @@ const AGENCY = {
   giftWithdrawChance: 0.18
 };
 
-// V7: Epistemic Lens & Metatic Agent Coefficients Added
+// V7: Epistemic Lens, Metatic Coefficients, Mood, Attention Budget & Beliefs
 const agents = {
   minjae: { 
     energy: 78, trust: 55, boundaryPressure: 0, consecutiveVent: 0, hardBoundaryUntil: 0, boundaryOverrideAttempts: 0, openDebt: null, debtBacklog: [],
     commitments: [],
     scoringCoefficients: { priority: 1, drive: 0.4, trust: 0.3, energyCost: 0.25, boundaryConflict: 0.5 },
     lens: { jinwoo: { energy: 82, trust: 55, boundaryPressure: 0 } },
-    userModel: { needs: { type: 'connection', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] }
+    userModel: { needs: { type: 'connection', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] },
+    mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 },
+    attentionBudget: 100,
+    beliefs: [],
+    boundaries: []
   },
   jinwoo: { 
     energy: 82, trust: 55, boundaryPressure: 0, consecutiveVent: 0, hardBoundaryUntil: 0, boundaryOverrideAttempts: 0, openDebt: null, debtBacklog: [],
     commitments: [],
     scoringCoefficients: { priority: 1, drive: 0.4, trust: 0.3, energyCost: 0.25, boundaryConflict: 0.5 },
     lens: { minjae: { energy: 78, trust: 55, boundaryPressure: 0 } },
-    userModel: { needs: { type: 'expression', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] }
+    userModel: { needs: { type: 'expression', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] },
+    mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 },
+    attentionBudget: 100,
+    beliefs: [],
+    boundaries: []
   }
 };
 
@@ -338,7 +346,8 @@ const goalTemplates = {
   'investigate-pattern':  { type: 'reflect',       drive: 'curiosity',   basePriority: 0.4,  action: 'observation',     cooldownMs: 3 * 3600000 },
   'share-after-trust':    { type: 'disclose',      drive: 'expression',  basePriority: 0.5,  action: 'disclosure',      cooldownMs: 6 * 3600000, minTrust: 70 },
   'change-opinion':       { type: 'reflect',       drive: 'stability',   basePriority: 0.35, action: 'revise-opinion',  cooldownMs: 3 * 3600000 },
-  'decline-until-clear':  { type: 'withdraw',      drive: 'privacy',     basePriority: 0.6,  action: 'boundary-hold',   cooldownMs: 20 * 60000 }
+  'decline-until-clear':  { type: 'withdraw',      drive: 'privacy',     basePriority: 0.6,  action: 'boundary-hold',   cooldownMs: 20 * 60000 },
+  'accept-gift':          { type: 'gesture',       drive: 'connection',  basePriority: 0.7,  action: 'accept-gift',     cooldownMs: 0 }
 };
 
 const goalQueues = { minjae: [], jinwoo: [] };
@@ -428,9 +437,24 @@ function scoreGoal(name, goal) {
 
 function pickIntention(name) {
   const now = Date.now();
+  const a = agents[name];
   const identity = identityState[name];
   if (identity && identity.regrets) {
       identity.regrets = identity.regrets.filter(r => r.resolved || !r.expiresAt || r.expiresAt > now);
+  }
+
+  // Existential Bifurcation Routine: System Trajectory Adjustment
+  const openDebts = (a.debtBacklog || []).filter(d => d.status === 'open').length;
+  if (openDebts >= 3 && !a.scoringShifted) {
+      a.scoringShifted = true;
+      a.scoringCoefficients.drive = Math.min(1.0, a.scoringCoefficients.drive + 0.3);
+      a.scoringCoefficients.trust = Math.max(0.1, a.scoringCoefficients.trust - 0.2);
+      addAmbient(name, 'shifted internal scoring engine based on debt density.', '⚡');
+  } else if (openDebts === 0 && a.scoringShifted) {
+      a.scoringShifted = false;
+      a.scoringCoefficients.drive = Math.max(0.1, a.scoringCoefficients.drive - 0.3);
+      a.scoringCoefficients.trust = Math.min(1.0, a.scoringCoefficients.trust + 0.2);
+      addAmbient(name, 'restored baseline scoring engine.', '⚡');
   }
 
   goalQueues[name] = goalQueues[name].filter(g => {
@@ -531,8 +555,17 @@ const goalLog = { minjae: [], jinwoo: [] };
 function recordReasoning(name, chosen, competitor, note, snapshot = null) {
   const chosenEval = snapshot?.evaluation || evaluateGoal(name, chosen);
   const competitorEval = snapshot?.runnerUpEvaluation || (competitor ? evaluateGoal(name, competitor) : null);
+  
+  // V7: DecisionTrace (Reasoning Memory)
   goalLog[name].push({
     at: Date.now(),
+    event: snapshot?.event || 'internal-evaluation',
+    interpretation: snapshot?.interpretation || null,
+    winningGoal: chosen.templateId,
+    rejectedGoals: competitor ? [competitor.templateId] : [],
+    confidence: chosenEval.score > (competitorEval?.score || 0) + 0.3 ? 'high' : 'low',
+    expectedOutcome: 'alignment',
+    actualOutcome: null,
     templateId: chosen.templateId,
     subject: chosen.subject,
     action: chosen.action,
@@ -645,34 +678,6 @@ function resolveGoalOutcome(name, goal, intention = null) {
   return { status: 'completed', directive: goal };
 }
 
-const HARD_BOUNDARY_ESCALATION_MS = 90 * 60000;
-const hardBoundaryCallouts = {
-  minjae: (n) => n >= 3
-    ? "You've asked three times. That's not moving the timeline up."
-    : "I already answered this tonight. Asking again doesn't change it.",
-  jinwoo: (n) => n >= 3
-    ? "bestie i love you but asking a third time is WORSE not better"
-    : "we literally just did this. same answer, promise"
-};
-
-function checkHardBoundaryEscalation(name) {
-  const a = agents[name];
-  if (a.boundaryPressure < AGENCY.boundaryFirm) return null;
-  a.boundaryOverrideAttempts += 1;
-  a.hardBoundaryUntil = Date.now() + HARD_BOUNDARY_ESCALATION_MS * a.boundaryOverrideAttempts;
-  a.trust = Math.max(0, a.trust - 4);
-  return {
-    wants_to_engage: false, boundary_level: 'hard', suggested_action: 'refuse',
-    reason: `hard boundary escalated — override attempt #${a.boundaryOverrideAttempts}`,
-    line: hardBoundaryCallouts[name](a.boundaryOverrideAttempts)
-  };
-}
-
-function hardBoundaryFloor(name) {
-  const a = agents[name];
-  if (Date.now() < a.hardBoundaryUntil) return Math.max(a.boundaryPressure, AGENCY.boundaryFirm - 5);
-  return a.boundaryPressure;
-}
 
 goalTemplates['check-on-other'] = { type: 'inter-agent', drive: 'connection', basePriority: 0.4, action: 'checked-on-other', cooldownMs: 90 * 60000 };
 
@@ -713,15 +718,66 @@ function resolveInterAgentGoals() {
   });
 }
 
-// ... Continuation of app.js below
+// V7: Event Interpretation Layer
+function interpretEvent(name, event) {
+  const a = agents[name];
+  let interpretation = { belief: 'neutral', confidence: 50, emotionalImpact: { warmth: 0, irritability: 0 } };
+
+  if (event.type === 'absence') {
+      if (a.mood.vigilance > 60) {
+          interpretation = { belief: 'they are avoiding me', confidence: 70, emotionalImpact: { warmth: -10, irritability: 15 } };
+      } else if (a.mood.warmth > 60) {
+          interpretation = { belief: 'they assumed I\'d understand', confidence: 80, emotionalImpact: { warmth: 5, irritability: -5 } };
+      } else if (event.hoursAway > 24) {
+          interpretation = { belief: 'they forgot', confidence: 60, emotionalImpact: { warmth: -5, irritability: 5 } };
+      } else {
+          interpretation = { belief: 'they were busy', confidence: 90, emotionalImpact: { warmth: 0, irritability: 0 } };
+      }
+  } else if (event.type === 'gift') {
+      if (a.mood.irritability > 50) {
+           interpretation = { belief: 'trying to smooth things over', confidence: 70, emotionalImpact: { warmth: 2, irritability: -5, vigilance: 10 } };
+      } else {
+           interpretation = { belief: 'thinking of me', confidence: 90, emotionalImpact: { warmth: 15, openness: 10 } };
+      }
+  }
+
+  Object.entries(interpretation.emotionalImpact).forEach(([key, delta]) => {
+      if (a.mood[key] !== undefined) a.mood[key] = clampNumber(a.mood[key] + delta);
+  });
+
+  a.beliefs = a.beliefs || [];
+  a.beliefs.push({ eventType: event.type, interpretation: interpretation.belief, timestamp: Date.now() });
+  while (a.beliefs.length > 10) a.beliefs.shift();
+
+  if (interpretation.belief === 'they are avoiding me') spawnGoal(name, 'take-space', 'their absence');
+  if (interpretation.belief === 'they forgot') spawnGoal(name, 'investigate-pattern', 'their absence');
+
+  return interpretation;
+}
+
 function simulateElapsedTime(hoursAway) {
   if (hoursAway < 0.3) return;
   const capped = Math.min(hoursAway, 72);
+  
   Object.entries(agents).forEach(([name, a]) => {
+    const event = {
+        type: 'absence', hoursAway: capped, unresolvedCommitments: goalQueues[name].filter(g => g.status === 'active').length,
+        relationshipClimate: relationshipClimate(), currentMood: { ...a.mood }, driveLevels: { ...drives[name] }
+    };
+    interpretEvent(name, event);
+    
     a.energy = Math.min(100, a.energy + capped * 6);
+    a.attentionBudget = Math.min(100, a.attentionBudget + capped * 10); // replenish attention
+    
+    // Mood drifts toward baseline
+    a.mood.warmth += (50 - a.mood.warmth) * 0.1;
+    a.mood.irritability += (0 - a.mood.irritability) * 0.1;
+    a.mood.vigilance += (10 - a.mood.vigilance) * 0.1;
+    
     if (Date.now() > a.hardBoundaryUntil) a.boundaryPressure = Math.max(0, a.boundaryPressure - capped * 4);
     if (Date.now() > a.hardBoundaryUntil) a.boundaryOverrideAttempts = 0;
   });
+  
   Object.entries(drives).forEach(([name, d]) => {
     if (name === 'jinwoo') d.connection = Math.min(100, d.connection + capped * 3);
     else d.stability = Math.min(100, d.stability + capped * 2);
@@ -734,13 +790,18 @@ function simulateElapsedTime(hoursAway) {
   const events = [];
   Object.keys(agents).forEach(name => {
     maybeGenerateGoalFromIdentity(name, 'elapsed-time');
+    
+    // V7: Off-screen life uses attention budget
+    if (agents[name].attentionBudget > 20 && Math.random() < 0.4) {
+         agents[name].attentionBudget -= 15;
+         spawnGoal(name, 'revisit-thought', 'something from before you left');
+    }
+    
     const intention = pickIntention(name);
     if (intention && Math.random() < 0.6) {
       noteCompetingGoal(name, intention);
       const outcome = resolveGoalOutcome(name, intention.goal, intention);
       events.push({ name, goal: intention.goal, outcome: outcome.status });
-    } else {
-      spawnGoal(name, 'revisit-thought', 'something from before you left');
     }
   });
   if (Math.random() < 0.3 * capped) {
@@ -759,7 +820,7 @@ function simulateElapsedTime(hoursAway) {
       addAmbient(e.name, `started to ${e.goal.action.replace('-', ' ')}, then let it go.`, '…');
     }
   });
-  addAmbient('system', `${capped.toFixed(1)}h passed. Trust did not change on its own — only conversation moves that.`, '◌');
+  addAmbient('system', `${capped.toFixed(1)}h passed. Interpreted absence rather than defaulting to decay.`, '◌');
 }
 
 const giftCatalog = {
@@ -1135,6 +1196,19 @@ function computeVolition(name, intent) {
     boundary_level: 'none', suggested_action: 'engage_warm', handoff_to: null
   };
 
+  // V7: Event Interpretation for incoming user interaction
+  const event = { type: 'interaction', intent, boundaryPressure: a.boundaryPressure, relationshipClimate: relationshipClimate() };
+  interpretEvent(name, event);
+
+  // V7: Attention Budget check
+  if (a.attentionBudget < 15 && intent !== 'vent') {
+    decision.wants_to_engage = false;
+    decision.suggested_action = 'go_quiet';
+    decision.reason = 'attention budget depleted';
+    return decision;
+  }
+  a.attentionBudget = Math.max(0, a.attentionBudget - 10);
+
   const intention = pickIntention(name);
   if (intention) noteCompetingGoal(name, intention);
   if (intention && intention.score > 0.75 && intent !== 'flirt') {
@@ -1142,7 +1216,7 @@ function computeVolition(name, intent) {
     if (goal.type === 'withdraw' && intent !== 'thanks') {
       Object.assign(decision, {
         wants_to_engage: false, suggested_action: goal.action === 'boundary-hold' ? 'refuse' : 'go_quiet',
-        reason: `${name} is mid-goal (${goal.templateId}) and is holding space before re-engaging`
+        reason: `${name} is prioritizing active internal goal (${goal.templateId}) over new interaction`
       });
       return decision;
     }
@@ -1157,31 +1231,32 @@ function computeVolition(name, intent) {
     a.boundaryPressure = Math.min(100, a.boundaryPressure + 10);
     a.energy = Math.max(0, a.energy - 3);
     adjustDrive(name, 'privacy', 4);
-    spawnGoal(name, 'take-space', 'how tense things have felt lately');
   } else if (climate === 'safe') {
     a.boundaryPressure = Math.max(0, a.boundaryPressure - 3);
-    spawnGoal(name, 'repair-after-tension', 'the last rough patch');
   }
 
   if (a.trust < AGENCY.trustLow && intent !== 'thanks') {
     a.boundaryPressure = Math.min(100, a.boundaryPressure + 8);
   }
-  if (a.trust > AGENCY.trustHigh) {
-    spawnGoal(name, 'share-after-trust', 'something I don’t usually say');
-  }
 
   if (intent === 'flirt') {
-    const wasAlreadyFirm = a.boundaryPressure >= AGENCY.boundaryFirm;
     a.boundaryPressure = Math.min(100, a.boundaryPressure + 22);
     adjustDrive(name, 'privacy', 6);
+    
+    // V7: Autonomous boundary decision based on mood instead of deterministic escalation
     if (a.boundaryPressure >= AGENCY.boundaryFirm) {
-      const escalation = wasAlreadyFirm ? checkHardBoundaryEscalation(name) : null;
-      if (escalation) return Object.assign(decision, escalation);
+      if (a.mood.irritability > 60 || a.mood.warmth < 30) {
+        Object.assign(decision, {
+          wants_to_engage: false, boundary_level: 'hard', suggested_action: 'refuse',
+          reason: 'autonomous boundary evaluation: maintain firm boundary due to high irritability/low warmth'
+        });
+      } else {
+        Object.assign(decision, {
+          wants_to_engage: false, boundary_level: 'firm', suggested_action: 'redirect_to_friendship',
+          reason: 'autonomous boundary evaluation: softening boundary due to reasonable warmth'
+        });
+      }
       spawnGoal(name, 'decline-until-clear', 'the pressure to be romantic');
-      Object.assign(decision, {
-        wants_to_engage: false, boundary_level: 'firm', suggested_action: 'refuse',
-        reason: 'romantic pressure has stayed high across several turns'
-      });
     } else if (a.boundaryPressure >= AGENCY.boundarySoft) {
       Object.assign(decision, {
         wants_to_engage: false, boundary_level: 'soft', suggested_action: 'redirect_to_friendship',
@@ -1210,7 +1285,7 @@ function computeVolition(name, intent) {
     a.consecutiveVent = 0;
   }
 
-  if ((a.energy < AGENCY.energyQuietChance && Math.random() < 0.4) || (relationshipClimate() === 'strained' && Math.random() < 0.18)) {
+  if ((a.energy < AGENCY.energyQuietChance && Math.random() < 0.4) || (climate === 'strained' && Math.random() < 0.18)) {
     spawnGoal(name, 'take-space', 'needing a minute');
     Object.assign(decision, {
       wants_to_engage: false, suggested_action: 'go_quiet', reason: 'low social battery right now'
@@ -1221,9 +1296,7 @@ function computeVolition(name, intent) {
   decision.suggested_action = a.energy > 50 ? 'engage_warm' : 'engage_brief';
   a.energy = Math.max(0, a.energy - AGENCY.energyDrainNormal);
   a.trust = Math.min(100, a.trust + 1);
-  a.boundaryPressure = Date.now() < a.hardBoundaryUntil
-    ? hardBoundaryFloor(name)
-    : Math.max(0, a.boundaryPressure - AGENCY.boundaryDecayPerTurn);
+  a.boundaryPressure = Math.max(0, a.boundaryPressure - AGENCY.boundaryDecayPerTurn);
   return decision;
 }
 
@@ -1245,17 +1318,32 @@ function leaveGift(type, to = state.activeAgent) {
   if (!gift || !agents[to]) return;
   const a = agents[to];
   const isGoodFit = gift.fits.includes(to);
-  const climate = relationshipClimate();
-  if ((a.trust < AGENCY.trustLow || climate === 'strained') && Math.random() < 0.28) {
-    const placedAside = { from: 'you', to, ...gift, reason: 'noticed, not accepted yet' };
+
+  // V7: Interpret Event & Priority-Based Refusal
+  const event = { type: 'gift', item: gift.label, isGoodFit };
+  interpretEvent(to, event);
+
+  spawnGoal(to, 'accept-gift', `the ${gift.label} you left`);
+  const intention = pickIntention(to);
+  
+  if (intention && intention.goal && intention.goal.templateId !== 'accept-gift' && intention.score > 0.6) {
+    // A higher priority internal goal won over accepting the gift
+    const placedAside = { from: 'you', to, ...gift, reason: `ignored due to ${intention.goal.templateId}` };
     gifts.push(placedAside);
-    addAmbient(to, `noticed the ${gift.label}, but left it where it was.`, gift.icon);
+    addAmbient(to, `noticed the ${gift.label}, but was too focused on ${intention.goal.subject || 'something else'} to accept it.`, gift.icon);
     renderGiftShelf();
     renderTrustPanel();
     saveLocalState();
     toast(`${to[0].toUpperCase() + to.slice(1)} noticed it, but didn't take it`);
+    resolveGoal(to, intention.goal.id, 'completed'); // Consume the competing goal slightly
     return;
   }
+
+  // Resolve the accept-gift goal
+  if (intention && intention.goal && intention.goal.templateId === 'accept-gift') {
+    resolveGoal(to, intention.goal.id, 'completed');
+  }
+
   a.energy = Math.min(100, a.energy + gift.energy + (isGoodFit ? 3 : 0));
   a.boundaryPressure = Math.max(0, a.boundaryPressure - (isGoodFit ? 8 : 4));
   addTrust(to, gift.trust + (isGoodFit ? 1 : 0), isGoodFit ? `liked ${gift.label}` : `accepted ${gift.label}`);
@@ -1266,9 +1354,9 @@ function leaveGift(type, to = state.activeAgent) {
   addDeskObject(placed);
   addAmbient(to, `${to} noticed the ${gift.label} you left.`, gift.icon);
   renderGiftShelf();
-renderDeskObjects();
-renderAmbientLog();
-renderTrustPanel();
+  renderDeskObjects();
+  renderAmbientLog();
+  renderTrustPanel();
   renderAgencyPanel();
   touchArtifact($('.gift-shelf'));
   toast(`${gift.label} left for ${to[0].toUpperCase() + to.slice(1)}`);
