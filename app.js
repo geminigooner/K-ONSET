@@ -73,13 +73,16 @@ const AGENCY = {
   giftWithdrawChance: 0.18
 };
 
-// V7: Epistemic Lens, Metatic Coefficients, Mood, Attention Budget & Beliefs
+// V8: Epistemic Lens, Metatic Coefficients, Starvation & Breakthroughs
 const agents = {
   minjae: { 
     energy: 78, trust: 55, boundaryPressure: 0, consecutiveVent: 0, hardBoundaryUntil: 0, boundaryOverrideAttempts: 0, openDebt: null, debtBacklog: [],
     commitments: [],
-    scoringCoefficients: { priority: 1, drive: 0.4, trust: 0.3, energyCost: 0.25, boundaryConflict: 0.5 },
-    lens: { jinwoo: { energy: 82, trust: 55, boundaryPressure: 0 } },
+    goalCoefficients: { priority: 1, driveWeight: 0.4, relationshipWeight: 0.3, energyCostWeight: 0.25, boundaryConflictWeight: 0.5, valueAlignmentWeight: 1.0, debtPressureWeight: 0.2 },
+    scoringShifted: false,
+    estimatedState: { jinwoo: { energy: 82, trust: 55, boundaryPressure: 0, mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 }, attentionBudget: 100, activePriority: null, confidence: 50, lastUpdatedAt: 0, supportingObservations: [] } },
+    driveStarvation: { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 },
+    breakthroughCooldowns: { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 },
     userModel: { needs: { type: 'connection', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] },
     mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 },
     attentionBudget: 100,
@@ -89,8 +92,11 @@ const agents = {
   jinwoo: { 
     energy: 82, trust: 55, boundaryPressure: 0, consecutiveVent: 0, hardBoundaryUntil: 0, boundaryOverrideAttempts: 0, openDebt: null, debtBacklog: [],
     commitments: [],
-    scoringCoefficients: { priority: 1, drive: 0.4, trust: 0.3, energyCost: 0.25, boundaryConflict: 0.5 },
-    lens: { minjae: { energy: 78, trust: 55, boundaryPressure: 0 } },
+    goalCoefficients: { priority: 1, driveWeight: 0.4, relationshipWeight: 0.3, energyCostWeight: 0.25, boundaryConflictWeight: 0.5, valueAlignmentWeight: 1.0, debtPressureWeight: 0.2 },
+    scoringShifted: false,
+    estimatedState: { minjae: { energy: 78, trust: 55, boundaryPressure: 0, mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 }, attentionBudget: 100, activePriority: null, confidence: 50, lastUpdatedAt: 0, supportingObservations: [] } },
+    driveStarvation: { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 },
+    breakthroughCooldowns: { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 },
     userModel: { needs: { type: 'expression', confidence: 50 }, emotionalCondition: 'stable', avoidance: 0, revisionHistory: [] },
     mood: { warmth: 50, irritability: 0, openness: 50, confidence: 50, vigilance: 10, curiosity: 50 },
     attentionBudget: 100,
@@ -337,6 +343,11 @@ function compactIdentityContext(name) {
 }
 
 const goalTemplates = {
+  'breakthrough-curiosity':{ type: 'reflect',       drive: 'curiosity',   basePriority: 1.5,  action: 'leave-note',      cooldownMs: 48 * 3600000 },
+  'breakthrough-connection':{type: 'gesture',       drive: 'connection',  basePriority: 1.5,  action: 'leave-object',    cooldownMs: 48 * 3600000 },
+  'breakthrough-privacy':  { type: 'withdraw',      drive: 'privacy',     basePriority: 1.5,  action: 'go-quiet-goal',   cooldownMs: 48 * 3600000 },
+  'breakthrough-expression':{type: 'disclose',      drive: 'expression',  basePriority: 1.5,  action: 'disclosure',      cooldownMs: 48 * 3600000 },
+  'breakthrough-stability':{ type: 'repair',        drive: 'stability',   basePriority: 1.5,  action: 'repair-note',     cooldownMs: 48 * 3600000 },
   'revisit-thought':      { type: 'reflect',       drive: 'curiosity',   basePriority: 0.5,  action: 'leave-note',      cooldownMs: 2 * 3600000 },
   'gift-response':        { type: 'gesture',       drive: 'curiosity',   basePriority: 0.55, action: 'comment-gift',    cooldownMs: 30 * 60000 },
   'leave-object':         { type: 'gesture',       drive: 'connection',  basePriority: 0.45, action: 'leave-object',    cooldownMs: 45 * 60000 },
@@ -359,6 +370,9 @@ function adjustDrive(name, drive, delta) {
   const d = drives[name];
   if (!d || !(drive in d)) return;
   d[drive] = Math.max(0, Math.min(100, d[drive] + delta));
+  if (delta < 0 && agents[name].driveStarvation) {
+    agents[name].driveStarvation[drive] = Math.max(0, agents[name].driveStarvation[drive] + delta * 2);
+  }
 }
 
 function spawnGoal(name, templateId, subject, extra = {}) {
@@ -388,7 +402,7 @@ function spawnGoal(name, templateId, subject, extra = {}) {
   return goal;
 }
 
-// V7: Nonlinear satiation apex & Metatic Agent Coefficients implemented
+// V8: Nonlinear satiation apex & Metatic Agent Coefficients implemented
 function evaluateGoal(name, goal) {
   const a = agents[name];
   const relevantDrive = (drives[name][goal.drive] ?? 50) / 100;
@@ -398,19 +412,21 @@ function evaluateGoal(name, goal) {
   const alignment = valueAlignment(name, goal);
   const principle = assessPrinciples(name, goal);
   
-  const coeffs = a.scoringCoefficients || { priority: 1, drive: 0.4, trust: 0.3, energyCost: 0.25, boundaryConflict: 0.5 };
+  const coeffs = a.goalCoefficients || { priority: 1, driveWeight: 0.4, relationshipWeight: 0.3, energyCostWeight: 0.25, boundaryConflictWeight: 0.5, valueAlignmentWeight: 1.0, debtPressureWeight: 0.2 };
   
   let apexModifier = 0;
   if (relevantDrive > 0.85) {
       apexModifier = Math.pow(relevantDrive * 10, 2) / 100;
   }
 
+  const calculatedEnergyCost = goal.bypassEnergy ? 0 : energyCost * coeffs.energyCostWeight;
+
   const score = principle.veto ? -Infinity : goal.priority * coeffs.priority
-    + relevantDrive * coeffs.drive
-    + relationshipRelevance * coeffs.trust
-    - energyCost * coeffs.energyCost
-    - boundaryConflict * coeffs.boundaryConflict
-    + alignment.contribution
+    + relevantDrive * coeffs.driveWeight
+    + relationshipRelevance * coeffs.relationshipWeight
+    - calculatedEnergyCost
+    - boundaryConflict * coeffs.boundaryConflictWeight
+    + alignment.contribution * coeffs.valueAlignmentWeight
     - principle.penalty
     + apexModifier;
     
@@ -418,11 +434,11 @@ function evaluateGoal(name, goal) {
     score,
     components: {
       priority: goal.priority * coeffs.priority,
-      drive: relevantDrive * coeffs.drive,
-      relationship: relationshipRelevance * coeffs.trust,
-      energyCost: energyCost * coeffs.energyCost,
-      boundaryConflict: boundaryConflict * coeffs.boundaryConflict,
-      valueAlignment: alignment.contribution,
+      drive: relevantDrive * coeffs.driveWeight,
+      relationship: relationshipRelevance * coeffs.relationshipWeight,
+      energyCost: calculatedEnergyCost,
+      boundaryConflict: boundaryConflict * coeffs.boundaryConflictWeight,
+      valueAlignment: alignment.contribution * coeffs.valueAlignmentWeight,
       principlePenalty: principle.penalty,
       apexModifier: apexModifier
     },
@@ -444,17 +460,27 @@ function pickIntention(name) {
   }
 
   // Existential Bifurcation Routine: System Trajectory Adjustment
-  const openDebts = (a.debtBacklog || []).filter(d => d.status === 'open').length;
-  if (openDebts >= 3 && !a.scoringShifted) {
+  const openDebts = (a.debtBacklog || []).filter(d => d.status === 'open');
+  const totalDeferredWeight = openDebts.reduce((sum, d) => sum + (d.deferredScore || 0), 0);
+  const oldDebts = openDebts.filter(d => Date.now() - d.since > 12 * 3600000).length;
+  const debtDensity = openDebts.length + totalDeferredWeight * 0.5 + oldDebts * 1.5;
+  
+  if (!a.goalCoefficients) a.goalCoefficients = { priority: 1, driveWeight: 0.4, relationshipWeight: 0.3, energyCostWeight: 0.25, boundaryConflictWeight: 0.5, valueAlignmentWeight: 1.0, debtPressureWeight: 0.2 };
+  
+  if (debtDensity >= 4.5 && !a.scoringShifted) {
       a.scoringShifted = true;
-      a.scoringCoefficients.drive = Math.min(1.0, a.scoringCoefficients.drive + 0.3);
-      a.scoringCoefficients.trust = Math.max(0.1, a.scoringCoefficients.trust - 0.2);
+      a.goalCoefficients.driveWeight = Math.min(0.85, a.goalCoefficients.driveWeight + 0.45);
+      a.goalCoefficients.relationshipWeight = Math.max(0.05, a.goalCoefficients.relationshipWeight - 0.25);
+      a.goalCoefficients.debtPressureWeight = Math.min(1.0, a.goalCoefficients.debtPressureWeight + 0.4);
       addAmbient(name, 'shifted internal scoring engine based on debt density.', '⚡');
-  } else if (openDebts === 0 && a.scoringShifted) {
+      if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'phase-shift', interpretation: 'debt threshold crossed', note: 'coefficients modified', templateId: 'meta', action: 'shift', subject: 'meta' });
+  } else if (debtDensity < 2.0 && a.scoringShifted) {
       a.scoringShifted = false;
-      a.scoringCoefficients.drive = Math.max(0.1, a.scoringCoefficients.drive - 0.3);
-      a.scoringCoefficients.trust = Math.min(1.0, a.scoringCoefficients.trust + 0.2);
+      a.goalCoefficients.driveWeight = Math.max(0.4, a.goalCoefficients.driveWeight - 0.45);
+      a.goalCoefficients.relationshipWeight = Math.min(0.3, a.goalCoefficients.relationshipWeight + 0.25);
+      a.goalCoefficients.debtPressureWeight = Math.max(0.2, a.goalCoefficients.debtPressureWeight - 0.4);
       addAmbient(name, 'restored baseline scoring engine.', '⚡');
+      if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'phase-shift-decay', interpretation: 'debt threshold cleared', note: 'coefficients restored', templateId: 'meta', action: 'shift', subject: 'meta' });
   }
 
   goalQueues[name] = goalQueues[name].filter(g => {
@@ -601,10 +627,7 @@ function noteCompetingGoal(name, intention) {
       while (backlog.length > 4) backlog.shift();
       
       if (backlog.filter(d => d.status === 'open').length >= 3) {
-         if(agents[name].scoringCoefficients) {
-             agents[name].scoringCoefficients.drive = 0.85;
-             agents[name].scoringCoefficients.trust = 0.05;
-         }
+         // Bifurcation handled in pickIntention now
       }
     }
     resolveGoal(name, runnerUp.id, 'deferred');
@@ -660,8 +683,26 @@ function estimateBackfireChance(name, goal, intention = null) {
 }
 
 function resolveGoalOutcome(name, goal, intention = null) {
+  const other = otherAgent(name);
+  let backfireOverride = false;
+  
+  if (goal.type === 'inter-agent' || goal.action === 'cross-talk' || goal.action === 'checked-on-other') {
+      if (agents[name].estimatedState && agents[name].estimatedState[other]) {
+          const est = agents[name].estimatedState[other];
+          const actual = agents[other];
+          if (est.trust !== undefined && Math.abs(est.trust - actual.trust) > 20) {
+              backfireOverride = true;
+              est.confidence = Math.max(0, est.confidence - 20);
+              est.trust = actual.trust; // bounded recalibration via observation
+              est.lastUpdatedAt = Date.now();
+              if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'miscalculation', templateId: goal.templateId, action: 'recalibrate', subject: 'estimation error', note: 'Estimation error exceeded threshold' });
+              spawnGoal(name, 'investigate-pattern', `${other}'s actual state`);
+          }
+      }
+  }
+  
   const chance = estimateBackfireChance(name, goal, intention);
-  const backfires = Math.random() < chance;
+  const backfires = backfireOverride || Math.random() < chance;
   if (backfires) {
     resolveGoal(name, goal.id, 'completed-bad');
     addTrust(name, -3, `${goal.templateId} landed wrong`);
@@ -698,10 +739,13 @@ function resolveInterAgentGoals() {
     if (!goal) return;
     const other = otherAgent(name);
     
-    // V7 Epistemic Lens Update
-    if(agents[name].lens && agents[name].lens[other]) {
-        agents[name].lens[other].friction = Math.max(0, agents[name].lens[other].friction - 1);
-    }
+    // V8 Epistemic Lens Update
+    if (!agents[name].estimatedState) agents[name].estimatedState = { [other]: { trust: 50, boundaryPressure: 0, confidence: 50, lastUpdatedAt: 0 } };
+    if (!agents[name].estimatedState[other]) agents[name].estimatedState[other] = { trust: 50, boundaryPressure: 0, confidence: 50, lastUpdatedAt: 0 };
+    
+    agents[name].estimatedState[other].trust = Math.min(100, agents[name].estimatedState[other].trust + 2);
+    agents[name].estimatedState[other].confidence = Math.min(100, agents[name].estimatedState[other].confidence + 5);
+    agents[name].estimatedState[other].lastUpdatedAt = Date.now();
     
     resolveGoal(name, goal.id, 'completed');
     recordOutcome(name, goal, 'completed', null, 0);
@@ -724,14 +768,25 @@ function interpretEvent(name, event) {
   let interpretation = { belief: 'neutral', confidence: 50, emotionalImpact: { warmth: 0, irritability: 0 } };
 
   if (event.type === 'absence') {
-      if (a.mood.vigilance > 60) {
-          interpretation = { belief: 'they are avoiding me', confidence: 70, emotionalImpact: { warmth: -10, irritability: 15 } };
-      } else if (a.mood.warmth > 60) {
-          interpretation = { belief: 'they assumed I\'d understand', confidence: 80, emotionalImpact: { warmth: 5, irritability: -5 } };
-      } else if (event.hoursAway > 24) {
-          interpretation = { belief: 'they forgot', confidence: 60, emotionalImpact: { warmth: -5, irritability: 5 } };
+      if (event.hoursAway > 24) {
+          if (a.mood.vigilance > 60 || event.previousAbsencePattern > 2) {
+              interpretation = { belief: 'deliberate withdrawal', confidence: 80, emotionalImpact: { warmth: -15, irritability: 20 } };
+              spawnGoal(name, 'decline-until-clear', 'the long silence');
+          } else if (a.mood.warmth > 60) {
+              interpretation = { belief: 'trusted silence', confidence: 75, emotionalImpact: { warmth: 5 } };
+          } else {
+              interpretation = { belief: 'drifted away', confidence: 65, emotionalImpact: { warmth: -10, vigilance: 10 } };
+              spawnGoal(name, 'investigate-pattern', 'the long absence');
+          }
+          userMemory.ignoredAbsences = (userMemory.ignoredAbsences || 0) + 1;
       } else {
-          interpretation = { belief: 'they were busy', confidence: 90, emotionalImpact: { warmth: 0, irritability: 0 } };
+          if (a.mood.vigilance > 60) {
+              interpretation = { belief: 'they are avoiding me', confidence: 70, emotionalImpact: { warmth: -10, irritability: 15 } };
+          } else if (a.mood.warmth > 60) {
+              interpretation = { belief: 'they assumed I\'d understand', confidence: 80, emotionalImpact: { warmth: 5, irritability: -5 } };
+          } else {
+              interpretation = { belief: 'they were busy', confidence: 90, emotionalImpact: { warmth: 0, irritability: 0 } };
+          }
       }
   } else if (event.type === 'gift') {
       if (a.mood.irritability > 50) {
@@ -762,7 +817,8 @@ function simulateElapsedTime(hoursAway) {
   Object.entries(agents).forEach(([name, a]) => {
     const event = {
         type: 'absence', hoursAway: capped, unresolvedCommitments: goalQueues[name].filter(g => g.status === 'active').length,
-        relationshipClimate: relationshipClimate(), currentMood: { ...a.mood }, driveLevels: { ...drives[name] }
+        relationshipClimate: relationshipClimate(), currentMood: { ...a.mood }, driveLevels: { ...drives[name] },
+        previousAbsencePattern: userMemory.ignoredAbsences
     };
     interpretEvent(name, event);
     
@@ -770,18 +826,51 @@ function simulateElapsedTime(hoursAway) {
     a.attentionBudget = Math.min(100, a.attentionBudget + capped * 10); // replenish attention
     
     // Mood drifts toward baseline
-    a.mood.warmth += (50 - a.mood.warmth) * 0.1;
-    a.mood.irritability += (0 - a.mood.irritability) * 0.1;
-    a.mood.vigilance += (10 - a.mood.vigilance) * 0.1;
+    if (hoursAway <= 24) {
+        a.mood.warmth += (50 - a.mood.warmth) * 0.1;
+        a.mood.irritability += (0 - a.mood.irritability) * 0.1;
+        a.mood.vigilance += (10 - a.mood.vigilance) * 0.1;
+    }
     
     if (Date.now() > a.hardBoundaryUntil) a.boundaryPressure = Math.max(0, a.boundaryPressure - capped * 4);
     if (Date.now() > a.hardBoundaryUntil) a.boundaryOverrideAttempts = 0;
   });
   
   Object.entries(drives).forEach(([name, d]) => {
-    if (name === 'jinwoo') d.connection = Math.min(100, d.connection + capped * 3);
-    else d.stability = Math.min(100, d.stability + capped * 2);
-    d.curiosity = Math.min(100, d.curiosity + capped * 1.5);
+    const a = agents[name];
+    if (!a.driveStarvation) a.driveStarvation = { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 };
+    if (!a.breakthroughCooldowns) a.breakthroughCooldowns = { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 };
+    
+    Object.keys(d).forEach(driveName => {
+        let baseGrowth = 0;
+        if (name === 'jinwoo' && driveName === 'connection') baseGrowth = 3;
+        else if (name === 'minjae' && driveName === 'stability') baseGrowth = 2;
+        else if (driveName === 'curiosity') baseGrowth = 1.5;
+        else baseGrowth = 1.0;
+        
+        let delta = capped * baseGrowth;
+        
+        if (d[driveName] > 75) {
+            a.driveStarvation[driveName] += capped;
+        } else {
+            a.driveStarvation[driveName] = Math.max(0, a.driveStarvation[driveName] - capped);
+        }
+
+        if (a.driveStarvation[driveName] > 24) {
+            const multiplier = Math.min(2.5, 1 + (a.driveStarvation[driveName] - 24) / 48);
+            delta *= multiplier;
+        }
+        
+        d[driveName] = Math.min(100, d[driveName] + delta);
+        
+        if (d[driveName] > 95 && a.driveStarvation[driveName] > 72 && (Date.now() - (a.breakthroughCooldowns[driveName] || 0) > 48 * 3600000)) {
+            const breakthrough = spawnGoal(name, 'breakthrough-' + driveName, 'overwhelming drive pressure', { priority: 1.5, source: 'breakthrough', bypassEnergy: true });
+            if (breakthrough) {
+                a.breakthroughCooldowns[driveName] = Date.now();
+                if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'breakthrough', templateId: breakthrough.templateId, subject: driveName, action: 'spawn', selectedScore: d[driveName], note: `starved for ${a.driveStarvation[driveName].toFixed(1)}h` });
+            }
+        }
+    });
   });
 
   maybeSpawnInterAgentGoal();
@@ -876,6 +965,19 @@ function loadLocalState() {
       if (agents[name].openDebt && !agents[name].debtBacklog.length) {
         agents[name].debtBacklog.push({ ...agents[name].openDebt, id: `legacy-debt-${Date.now()}`, status: 'open' });
         agents[name].openDebt = null;
+      }
+      if (!agents[name].goalCoefficients) {
+          agents[name].goalCoefficients = agents[name].scoringCoefficients || { priority: 1, driveWeight: 0.4, relationshipWeight: 0.3, energyCostWeight: 0.25, boundaryConflictWeight: 0.5, valueAlignmentWeight: 1.0, debtPressureWeight: 0.2 };
+      }
+      if (!agents[name].estimatedState) {
+          const other = name === 'minjae' ? 'jinwoo' : 'minjae';
+          agents[name].estimatedState = { [other]: { trust: 55, boundaryPressure: 0, confidence: 50, lastUpdatedAt: Date.now(), mood: { warmth: 50, irritability: 0 } } };
+      }
+      if (!agents[name].driveStarvation) {
+          agents[name].driveStarvation = { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 };
+      }
+      if (!agents[name].breakthroughCooldowns) {
+          agents[name].breakthroughCooldowns = { curiosity: 0, connection: 0, privacy: 0, expression: 0, stability: 0 };
       }
     });
     Object.entries(saved.drives || {}).forEach(([name, values]) => {
@@ -1200,6 +1302,20 @@ function computeVolition(name, intent) {
   const event = { type: 'interaction', intent, boundaryPressure: a.boundaryPressure, relationshipClimate: relationshipClimate() };
   interpretEvent(name, event);
 
+  const activeGoals = goalQueues[name].filter(g => g.status === 'active');
+  const activeCrisis = activeGoals.find(g => evaluateGoal(name, g).score > 0.85 && ['inter-agent', 'repair', 'withdraw', 'reflect'].includes(g.type));
+  
+  if (activeCrisis && (intent === 'flirt' || intent === 'gift')) {
+      if (goalLog[name]) goalLog[name].push({ at: Date.now(), event: 'cognitive-throttle', interpretation: `rejected ${intent}`, action: 'throttle', templateId: 'meta', subject: 'user intent', note: `processing crisis: ${activeCrisis.templateId}` });
+      Object.assign(decision, {
+          wants_to_engage: false,
+          suggested_action: 'reject_gift_or_intent',
+          boundary_level: 'firm',
+          reason: 'agent is processing an internal crisis and cannot accept overridden priorities'
+      });
+      return decision;
+  }
+
   // V7: Attention Budget check
   if (a.attentionBudget < 15 && intent !== 'vent') {
     decision.wants_to_engage = false;
@@ -1323,6 +1439,18 @@ function leaveGift(type, to = state.activeAgent) {
   const event = { type: 'gift', item: gift.label, isGoodFit };
   interpretEvent(to, event);
 
+  const activeCrisis = goalQueues[to].find(g => g.status === 'active' && evaluateGoal(to, g).score > 0.85 && ['inter-agent', 'repair', 'withdraw', 'reflect'].includes(g.type));
+  
+  if (activeCrisis) {
+      if (goalLog[to]) goalLog[to].push({ at: Date.now(), event: 'cognitive-throttle', interpretation: 'rejected gift', note: `processing crisis: ${activeCrisis.templateId}`, action: 'throttle', templateId: 'meta', subject: 'gift' });
+      const placedAside = { from: 'you', to, ...gift, reason: `rejected due to crisis: ${activeCrisis.templateId}` };
+      gifts.push(placedAside);
+      addAmbient(to, `could not process the ${gift.label} right now. Too much going on.`, gift.icon);
+      renderGiftShelf();
+      toast(`${to[0].toUpperCase() + to.slice(1)} rejected the gift`);
+      return;
+  }
+
   spawnGoal(to, 'accept-gift', `the ${gift.label} you left`);
   const intention = pickIntention(to);
   
@@ -1440,7 +1568,11 @@ function handleNonEngagement(name, decision, prompt, intent) {
   }
 
   let line;
-  if (decision.suggested_action === 'refuse' && decision.boundary_level === 'hard') {
+  if (decision.suggested_action === 'reject_gift_or_intent') {
+    line = name === 'minjae' ? "I can't do this right now. I have too much going on." : "literally cannot process this right now, brain is full";
+    if (intent === 'flirt' && userMemory.pressure > 2) addTrust(name, -5, 'repeated pressure during crisis');
+  }
+  else if (decision.suggested_action === 'refuse' && decision.boundary_level === 'hard') {
     line = decision.line || pickFrom(refusalLines[name]);
     maybeWithdrawGift(name, 'hard boundary');
   }
