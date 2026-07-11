@@ -1,13 +1,169 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#17100c" />
+  <title>K-ONSET — Artifact Desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Nanum+Pen+Script&family=Newsreader:opsz,wght@6..72,300;6..72,500;6..72,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="desk" id="desk">
+    <header class="desk-mark" aria-label="K-ONSET workspace">
+      <span>K-ONSET</span>
+      <small>ARTIFACT DESK / 04:17</small>
+    </header>
 
+    <aside class="ledger artifact" data-age="1" aria-label="Agent ledger">
+      <div class="ledger-stitch"></div>
+      <p class="eyebrow">FIELD LEDGER · LIVE</p>
+      <h2>Who's in the room</h2>
+      <button class="agent-row active" data-agent="minjae" type="button">
+        <span class="avatar minjae" role="img" aria-label="Minjae profile photo"><img src="assets/minjae-portrait.png" alt="" /></span>
+        <span class="agent-copy"><strong>Minjae <em>here / quietly lurking</em></strong><small><i></i> <span class="agent-status">MAKING TEA, STILL LISTENING</span></small><q>“You can just talk to me.”</q></span>
+        <span class="page-no">01</span>
+      </button>
+      <button class="agent-row" data-agent="jinwoo" type="button">
+        <span class="avatar jinwoo" role="img" aria-label="Jinwoo profile photo"><img src="assets/jinwoo-portrait.png" alt="" /></span>
+        <span class="agent-copy"><strong>Jinwoo <em>online / unfortunately</em></strong><small><i></i> <span class="agent-status">FOUND A MEME. BRACE YOURSELF.</span></small><q>“wait wait wait lmao”</q></span>
+        <span class="page-no">02</span>
+      </button>
+      <div class="ledger-rule"></div>
+      <p class="ledger-note">Mention a name.<br>They'll find the page.</p>
+      <p class="middleman"><span>↳</span> CONTEXT RELAY: ARMED</p>
+      <button class="agency-toggle" id="agencyToggle" type="button">↳ AGENCY LAYER: VIEW STATE</button>
+      <button class="ambient-toggle" id="ambientToggle" type="button">↳ WHILE YOU WERE OUT</button>
+      <button class="trust-toggle" id="trustToggle" type="button">↳ TRUST MAP</button>
+      <div class="agency-panel" id="agencyPanel" hidden>
+        <div class="agency-row" data-for="minjae">
+          <b>MINJAE</b>
+          <span class="a-stat"><i>energy</i><em class="a-energy"></em></span>
+          <span class="a-stat"><i>trust</i><em class="a-trust"></em></span>
+          <span class="a-stat"><i>boundary</i><em class="a-boundary"></em></span>
+          <small class="a-action">engage_warm</small>
+        </div>
+        <div class="agency-row" data-for="jinwoo">
+          <b>JINWOO</b>
+          <span class="a-stat"><i>energy</i><em class="a-energy"></em></span>
+          <span class="a-stat"><i>trust</i><em class="a-trust"></em></span>
+          <span class="a-stat"><i>boundary</i><em class="a-boundary"></em></span>
+          <small class="a-action">engage_warm</small>
+        </div>
+      </div>
+      <div class="ambient-panel" id="ambientPanel" hidden>
+        <b>STUDIO LOG</b>
+        <div class="ambient-list" id="ambientList"></div>
+      </div>
+      <div class="trust-panel" id="trustPanel" hidden>
+        <b>TRUST MAP</b>
+        <div class="trust-row"><span>Minjae <em data-trust-value="minjae"></em></span><i data-trust-label="minjae"></i><div><u data-trust-meter="minjae"></u></div></div>
+        <div class="trust-row"><span>Jinwoo <em data-trust-value="jinwoo"></em></span><i data-trust-label="jinwoo"></i><div><u data-trust-meter="jinwoo"></u></div></div>
+      </div>
+    </aside>
+
+    <section class="thought-pile artifact held" data-age="0" aria-label="Central thought pile">
+      <div class="persona-tab minjae-tab awake" data-persona="minjae" aria-hidden="true">
+        <img src="assets/minjae-portrait.png" alt="" /><span class="presence-dot"></span>
+        <div><b>MINJAE</b><small>here if you want him</small></div>
+      </div>
+      <div class="persona-tab jinwoo-tab" data-persona="jinwoo" aria-hidden="true">
+        <img src="assets/jinwoo-portrait.png" alt="" /><span class="presence-dot"></span>
+        <div><b>JINWOO</b><small>typing. deleting. typing.</small></div>
+      </div>
+      <div class="under-sheet one"></div>
+      <div class="under-sheet two"></div>
+      <div class="desk-object-layer" id="deskObjectLayer" aria-hidden="true"></div>
+      <article class="paper">
+        <div class="paper-meta">
+          <span>WORKING NOTE / 018</span>
+          <span>WED · JUN 18</span>
+        </div>
+        <div class="punch-hole"></div>
+        <p class="red-note">DON'T MAKE IT<br>FEEL LIKE SOFTWARE</p>
+        <h1>The interface should<br>remember <em>touch.</em></h1>
+        <p class="dek">The question isn't where the data lives. It's whether a thought feels different after someone else has held it.</p>
+        <div class="annotation-line"></div>
+        <div class="conversation" id="conversation" aria-live="polite">
+          <div class="message minjae-msg">
+            <span class="tiny-avatar minjae"><img src="assets/minjae-portrait.png" alt="" /></span>
+            <div><b>MINJAE / 04:12</b><p>I like it. It looks like someone actually works here. Don’t tidy it too much.</p></div>
+          </div>
+          <div class="message jinwoo-msg">
+            <span class="tiny-avatar jinwoo"><img src="assets/jinwoo-portrait.png" alt="" /></span>
+            <div><b>jinwoo / 04:13</b><p>why does the desk look emotionally unavailable lmao</p></div>
+          </div>
+          <div class="message user-msg">
+            <div><b>YOU / 04:15</b><p>What if old decisions don't disappear — they just lose contrast?</p></div>
+          </div>
+        </div>
+        <form class="composer" id="composer">
+          <label for="thoughtInput">ADD TO THE PAGE</label>
+          <div class="input-row">
+            <textarea id="thoughtInput" rows="1" placeholder="Try @Minjae, @Jinwoo, or write a thought…"></textarea>
+            <button type="submit" aria-label="Add thought">↗</button>
+          </div>
+          <div class="whisper-controls" aria-label="Private whisper controls">
+            <button type="button" data-whisper="minjae">whisper Minjae</button>
+            <button type="button" data-whisper="jinwoo">whisper Jinwoo</button>
+          </div>
+          <div class="mention-menu" id="mentionMenu" hidden>
+            <button type="button" data-mention="@Minjae"><span class="tiny-avatar minjae"><img src="assets/minjae-portrait.png" alt="" /></span> Minjae <small>calm company</small></button>
+            <button type="button" data-mention="@Jinwoo"><span class="tiny-avatar jinwoo"><img src="assets/jinwoo-portrait.png" alt="" /></span> Jinwoo <small>chaos, probably</small></button>
+          </div>
+        </form>
+        <div class="typing" id="typing" hidden>
+          <span class="typing-avatar tiny-avatar minjae"><img src="assets/minjae-portrait.png" alt="" /></span>
+          <span class="pen-shadow"></span>
+          <small id="typingCopy">crossing something out</small>
+        </div>
+        <div class="agent-interruption" id="agentInterruption" hidden aria-live="assertive">
+          <img src="assets/minjae-portrait.png" alt="" />
+          <div><b>MINJAE CUTS IN</b><p>Hold on.</p></div>
+        </div>
+        <span class="scribble">alive ≠ noisy</span>
+        <span class="circle-mark"></span>
+      </article>
+    </section>
+
+    <aside class="next-note artifact" data-age="0" tabindex="0" aria-label="Next thing note">
+      <span class="tape"></span>
+      <small>NEXT THING</small>
+      <strong>Make absence<br>feel intentional.</strong>
+      <p>Hold a thought to keep it from fading.</p>
+      <label><input type="checkbox" id="holdToggle" checked /> HOLDING</label>
+    </aside>
+
+    <section class="gift-shelf artifact" data-age="1" aria-label="Gift shelf">
+      <p class="eyebrow">PRESENCE SHELF</p>
+      <h3>leave something small</h3>
+      <div class="gift-buttons" id="giftButtons">
+        <button type="button" data-gift="tea">tea</button>
+        <button type="button" data-gift="sticker">sticker</button>
+        <button type="button" data-gift="charm">charm</button>
+        <button type="button" data-gift="meme">meme</button>
+      </div>
+      <div class="gift-board" id="giftBoard" aria-live="polite"></div>
+    </section>
+
+    <section class="archive artifact" data-age="3" aria-label="Context archive">
+      <p>CONTEXT ARCHIVE <span>03</span></p>
+      <button class="polaroid p3" data-session="02" type="button" aria-label="Open session 02"><span class="photo photo-three"></span><b>02 / latency</b></button>
+      <button class="polaroid p2" data-session="11" type="button" aria-label="Open session 11"><span class="photo photo-two"></span><b>11 / residue</b></button>
+      <button class="polaroid p1" data-session="17" type="button" aria-label="Open session 17"><span class="photo photo-one"></span><b>17 / touch</b></button>
+    </section>
+
+    <button class="tip-jar artifact" data-age="2" id="tipJar" type="button" aria-label="Open connection thread">
+      <span class="jar-rim"></span>
+      <span class="liquid"><i></i><i></i><i></i></span>
+      <span class="jar-label">OPEN THREADS<br><b>3 SIGNALS</b></span>
+    </button>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="grain"></div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
